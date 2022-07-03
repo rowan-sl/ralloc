@@ -1,4 +1,4 @@
-use core::{mem::size_of, alloc::{Allocator, AllocError}, ptr::{NonNull, slice_from_raw_parts_mut}};
+use core::{mem::size_of, alloc::{AllocError, Layout}, ptr::{NonNull, slice_from_raw_parts_mut}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Metadata {
@@ -52,56 +52,132 @@ impl<'a> RAlloc<'a> {
         s
     }
 
-    //* can const do ANYTHING???! */
-    /// RAlloc::new(), but const.
-    ///
+    // //* can const do ANYTHING???! */
+    // /// RAlloc::new(), but const.
+    // ///
+    // /// # Saftey
+    // ///
+    // /// - mem must be valid, and all that great stuff
+    // /// - the ptr to mem must be valid for the lifetime 'a (on Self)
+    // /// - mem must be large enough to fit at the minimum chunk size (Metadata::size)
+    // ///
+    // pub const unsafe fn new_const(mem: *mut [u8]) -> Self {
+    //     let mut s = Self {
+    //         mem: &mut*mem,
+    //     };
+    //     // write the metadata (i hate CTFE)
+    //     // for metadata (size)
+    //     let size = (*mem).len();
+    //     let size_bytes = size.to_le_bytes();
+    //     if size_bytes.len() == 2 {
+    //         s.mem[0] = size_bytes[0];
+    //         s.mem[1] = size_bytes[1];
+    //     } else if size_bytes.len() == 4 {
+    //         s.mem[0] = size_bytes[0];
+    //         s.mem[1] = size_bytes[1];
+    //         s.mem[2] = size_bytes[2];
+    //         s.mem[3] = size_bytes[3];
+    //     } else if size_bytes.len() == 8 {
+    //         s.mem[0] = size_bytes[0];
+    //         s.mem[1] = size_bytes[1];
+    //         s.mem[2] = size_bytes[2];
+    //         s.mem[3] = size_bytes[3];
+    //         s.mem[4] = size_bytes[4];
+    //         s.mem[5] = size_bytes[5];
+    //         s.mem[6] = size_bytes[6];
+    //         s.mem[7] = size_bytes[7];
+    //     } else {
+    //         panic!("Usize is not size 2, 4, or 8 (what are you running this on????)")
+    //     }
+    //     // for unused flag
+    //     s.mem[8] = 0;
+    //     s
+    // }
+
     /// # Saftey
     ///
     /// - mem must be valid, and all that great stuff
     /// - the ptr to mem must be valid for the lifetime 'a (on Self)
     /// - mem must be large enough to fit at the minimum chunk size (Metadata::size)
+    /// - **IMPORTANT**: Self::init must be called BEFORE ANY ALLOCATIONS OCCUR
     ///
-    pub const unsafe fn new_const(mem: *mut [u8]) -> Self {
+    pub const unsafe fn new_const_uninit(mem: *mut [u8]) -> Self {
         let s = Self {
             mem: &mut*mem,
         };
-        // write the metadata (i hate CTFE)
-        // for metadata (size)
-        let size = (*mem).len();
-        let size_bytes = size.to_le_bytes();
-        if size_bytes.len() == 2 {
-            s.mem[0] = size_bytes[0];
-            s.mem[1] = size_bytes[1];
-        } else if size_bytes.len() == 4 {
-            s.mem[0] = size_bytes[0];
-            s.mem[1] = size_bytes[1];
-            s.mem[2] = size_bytes[2];
-            s.mem[3] = size_bytes[3];
-        } else if size_bytes.len() == 8 {
-            s.mem[0] = size_bytes[0];
-            s.mem[1] = size_bytes[1];
-            s.mem[2] = size_bytes[2];
-            s.mem[3] = size_bytes[3];
-            s.mem[4] = size_bytes[4];
-            s.mem[5] = size_bytes[5];
-            s.mem[6] = size_bytes[6];
-            s.mem[7] = size_bytes[7];
-        } else {
-            panic!("Usize is not size 2, 4, or 8 (what are you running this on????)")
-        }
-        // for unused flag
-        s.mem[8] = 0;
         s
     }
 
+    /// initialize memory of self, writing base chunk
+    ///
+    /// uses unwrap_unchecked because cannot allocate or panic (for GlobalAlloc impl)
+    ///
+    /// # Saftey
+    ///
+    /// - self.mem.len() must be larger than Metadata::size
+    /// - must never have been initialized before
+    ///
+    pub unsafe fn init(&mut self) {
+        let capac = self.mem.len().checked_sub(Metadata::size()).unwrap_unchecked();
+        self.write_meta_at(0, Metadata { size: capac, used: false });
+    }
+
+    /// this may or may not be valid
+    pub fn is_uninit(&mut self) -> bool {
+        // TODO validate this, because it SHOULD work (with non-zero sized chunks in the first pos?)
+        // either way, there eventually should be a dedicated spot for checking for initialization
+        self.mem[0] == 0
+    }
+
+    /// # Saftey
+    ///
+    /// - (annoyingly) the returned NonNull<[u8]> is only valid for the lifetime of Self
+    ///
+    #[must_use]
+    #[forbid(unsafe_op_in_unsafe_fn)]
+    pub unsafe fn allocator_compatable_malloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let align = layout.align();
+        let size = layout.size();
+
+        let mut ptr = unsafe { self.malloc(size + align)? };
+        // * NOTE: currently, when running this under MIRI with -Zmiri-symbolic-alignment-check, this will allways return usize::MAX.
+        // *       nothing we can do about it, untill they add that functionality (it is intentional) but other than this its fine :shrug:
+        assert_ne!(ptr.align_offset(align), usize::MAX);
+        // make shure that the returned offset will not put us beyond the extra size of the allocation
+        assert!(ptr.align_offset(align) < align);
+        // offset the ptr
+        // Saftey:
+        // bounds of the offset are checked with the last two asserts
+        ptr = unsafe { ptr.add(ptr.align_offset(align)) };
+        let slice_ptr = slice_from_raw_parts_mut(ptr, size);
+        let nonnull = NonNull::new(slice_ptr).unwrap();
+        Ok(nonnull)
+    }
+
+    /// # Saftey
+    ///
+    /// - ptr must have come from this allocator instance
+    /// - it must never have been freed before
+    /// - Layout must be a valid layout describing it (not necessary in practice, but may change)
+    ///
+    pub unsafe fn allocator_compatable_free(&mut self, ptr: NonNull<u8>, _layout: Layout) {
+        let ptr = ptr.as_ptr();
+        self.free(ptr);
+    }
+
     /// Allocate a new chunk of size `size` and return a pointer to the start of the allocation
+    ///
+    /// # Lifetime of returned values / Saftey
+    ///
+    /// - The returned value is valid untill either the instance it came from is dropped, or it is passed to RAlloc::free
     ///
     /// # Alignment
     ///
     /// currently, this function provides no guarentees about the align of the returned ptr.
     ///
     #[must_use]
-    pub fn malloc(&mut self, size: usize) -> Result<*mut u8, AllocError> {
+    #[forbid(unsafe_op_in_unsafe_fn)]
+    pub unsafe fn malloc(&mut self, size: usize) -> Result<*mut u8, AllocError> {
         // println!("Allocating size {size}");
         self.defrag();
         // sentinal value for OOM (when no valid chunk is found)
@@ -277,33 +353,3 @@ fn offset_from<T>(slice: &[T], ptr: *const T) -> usize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RAllocWrapper<'a>(pub (crate) *mut RAlloc<'a>);
-
-unsafe impl<'a> Allocator for RAllocWrapper<'a> {
-    fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
-        let align = layout.align();
-        let size = layout.size();
-
-        let mut ptr = unsafe { &mut*self.0 }.malloc(size + align)?;
-        // println!("Original allocation of {size} bytes at {:#x}", ptr.expose_addr());
-        // make shure that align_offset actually is giving us a usefull answer
-        // * NOTE: currently, when running this under MIRI with -Zmiri-symbolic-alignment-check, this will allways return usize::MAX.
-        // *       nothing we can do about it, untill they add that functionality (it is intentional) but other than this its fine :shrug:
-        assert_ne!(ptr.align_offset(align), usize::MAX);
-        // make shure that the returned offset will not put us beyond the extra size of the allocation
-        assert!(ptr.align_offset(align) < align);
-        // offset the ptr
-        ptr = unsafe { ptr.add(ptr.align_offset(align)) };
-        let slice_ptr = slice_from_raw_parts_mut(ptr, size);
-        let nonnull = NonNull::new(slice_ptr).unwrap();
-        Ok(nonnull)
-    }
-
-    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, _layout: std::alloc::Layout) {
-        // let size = layout.size();
-        let ptr = ptr.as_ptr();
-        // println!("Deallocating {size} bytes, allocation at {:#x} (may be slignly misaligned)", ptr.expose_addr());
-        (&mut*self.0).free(ptr);
-    }
-}
