@@ -2,6 +2,8 @@ pub mod array;
 pub mod memmap;
 pub mod slice;
 
+use std::ptr::NonNull;
+
 use crate::allocator::RAlloc;
 
 pub trait Backing {
@@ -19,13 +21,13 @@ pub struct BackedAllocator<B: Backing>(
 impl<B: Backing> BackedAllocator<B> {
     pub fn new(mut b: B) -> Option<Self> {
         b.get_mem().fill(0);
-        let alloc = unsafe { RAlloc::new(b.get_mem() as *mut _)? };
+        let alloc = unsafe { RAlloc::new(NonNull::from(b.get_mem()))? };
         Some(Self(b, alloc))
     }
 
     pub fn get_alloc(&mut self) -> &mut RAlloc {
         // fine since Ralloc::into_raw() is equivelant to just dropping self
-        self.1 = unsafe { RAlloc::from_raw(self.0.get_mem() as *mut _) };
+        self.1 = unsafe { RAlloc::from_raw(NonNull::from(self.0.get_mem())) };
         &mut self.1
     }
 }

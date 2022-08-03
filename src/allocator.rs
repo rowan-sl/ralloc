@@ -77,7 +77,7 @@ impl AllocatorMetadata {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RAlloc {
-    mem: *mut [u8],
+    mem: NonNull<[u8]>,
 }
 
 impl RAlloc {
@@ -87,7 +87,7 @@ impl RAlloc {
     ///
     /// # Saftey
     /// - mem must be valid to use for as long as this struct (and all memory allocated by it) exists
-    pub const unsafe fn new(mem: *mut [u8]) -> Option<Self> {
+    pub const unsafe fn new(mem: NonNull<[u8]>) -> Option<Self> {
         // note for people working on this: it is VERY important that `mem` is not written to, as that will cause CTFE errors in some cases
 
         // CTFE assertions go brrrr
@@ -95,11 +95,11 @@ impl RAlloc {
         // this just makes shure that the zeroing check is accurate
         const _ASSERT: usize = (AllocatorMetadata::size() == 1) as usize - 1;
         // we do not have to write the AllocatorMetadata becuase it is valid in the state we want if loaded from zeroed mem
-        if (&*mem)[0] != 0 {
+        if (Self { mem }).mem()[0] != 0 {
             return None;
         }
         const MIN_SIZE: usize = AllocatorMetadata::size() + Metadata::size();
-        if (*mem).len() < MIN_SIZE {
+        if (Self { mem }).mem().len() < MIN_SIZE {
             return None;
         }
         Some(Self { mem })
@@ -107,23 +107,23 @@ impl RAlloc {
 
     /// # Saftey
     /// - mem must have come (directly or indirectly) from another allocator that had into_raw() called on it
-    pub unsafe fn from_raw(mem: *mut [u8]) -> Self {
+    pub unsafe fn from_raw(mem: NonNull<[u8]>) -> Self {
         Self { mem }
     }
 
     /// equvilant to copying the pointer before constructing the allocator, dropping the allocator, and then returning the copied ptr
-    pub fn into_raw(self) -> *mut [u8] {
+    pub fn into_raw(self) -> NonNull<[u8]> {
         self.mem
     }
 
     pub fn init(&mut self) {
         let mut alloc_meta =
-            AllocatorMetadata::from_bytes(&unsafe { &*self.mem }[..AllocatorMetadata::size()]);
+            AllocatorMetadata::from_bytes(&self.mem()[..AllocatorMetadata::size()]);
         if !alloc_meta.initialized {
             alloc_meta.initialized = true;
-            (unsafe { &mut *self.mem })[..AllocatorMetadata::size()]
-                .copy_from_slice(&alloc_meta.to_bytes()[..]);
-            let capac = unsafe { &*self.mem }
+            self.mem_mut()[..AllocatorMetadata::size()].copy_from_slice(&alloc_meta.to_bytes()[..]);
+            let capac = self
+                .mem()
                 .len()
                 .checked_sub(AllocatorMetadata::size() + Metadata::size());
             // saftey: length of mem is validated in Self::new()
@@ -321,7 +321,7 @@ impl RAlloc {
     /// - that chunk must be allocated BY THIS ALLOCATOR
     ///
     unsafe fn offset_by_ptr(&self, ptr: *const u8) -> usize {
-        offset_from(&*self.mem, ptr)
+        offset_from(self.mem(), ptr)
     }
 
     /// "uses" a chunk, setting it as taken and returning a pointer to its memory
@@ -379,21 +379,28 @@ impl RAlloc {
 
     fn read_meta_at(&self, mut offset: usize) -> Metadata {
         offset += Self::base_offset();
-        Metadata::from_bytes(&unsafe { &*self.mem }[offset..offset + Metadata::size()])
+        Metadata::from_bytes(&self.mem()[offset..offset + Metadata::size()])
     }
 
     fn write_meta_at(&mut self, mut offset: usize, meta: Metadata) {
         offset += Self::base_offset();
-        (unsafe { &mut *self.mem })[offset..offset + Metadata::size()]
-            .copy_from_slice(&meta.to_bytes()[..])
+        self.mem_mut()[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
     }
 
     fn capacity(&self) -> usize {
-        unsafe { &*self.mem }.len()
+        self.mem().len()
     }
 
     const fn base_offset() -> usize {
         AllocatorMetadata::size()
+    }
+
+    const fn mem(&self) -> &[u8] {
+        unsafe { &*(self.mem.as_ptr() as *const _) }
+    }
+
+    const fn mem_mut(&mut self) -> &mut [u8] {
+        unsafe { &mut *self.mem.as_ptr() }
     }
 }
 
