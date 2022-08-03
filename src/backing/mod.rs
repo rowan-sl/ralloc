@@ -2,7 +2,7 @@ pub mod memmap;
 pub mod array;
 pub mod slice;
 
-use crate::allocator_v2::RAlloc;
+use crate::allocator::RAlloc;
 
 pub trait Backing {
     fn get_mem(&mut self) -> &mut [u8];

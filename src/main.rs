@@ -3,7 +3,7 @@
 #![feature(strict_provenance)]
 #![feature(slice_ptr_get)]
 
-pub mod allocator_v2;
+pub mod allocator;
 pub mod wrappers;
 pub mod backing;
 
