@@ -1,4 +1,3 @@
-use core::ptr::slice_from_raw_parts_mut;
 use std::{path::Path, io::{self, Seek}, fs::OpenOptions, ops::DerefMut};
 
 use memmap2::{MmapOptions, MmapMut};
@@ -26,18 +25,8 @@ pub unsafe fn new_map<P: AsRef<Path>>(path: P, size: usize) -> Result<MmapMut, i
     Ok(map)
 }
 
-/// # Saftey
-///
-/// questionable. *sigh*
-/// TODO: validate (miri cant, since it doesnt support memmap syscalls *sigh*)
-///
-/// however, it appears that MmapMut hands out raw ptrs to the underlying map,
-/// which does not change (it contains a `*mut libc::c_void` internally that it hands out safely on request)
-///
-/// only issue would by lifetimes which seem fine
-///
-unsafe impl Backing for MmapMut {
-    fn get_mem(&mut self) -> *mut [u8] {
-        slice_from_raw_parts_mut(<MmapMut as DerefMut>::deref_mut(self).as_mut_ptr(), self.len())
+impl Backing for MmapMut {
+    fn get_mem(&mut self) -> &mut [u8] {
+        <MmapMut as DerefMut>::deref_mut(self)
     }
 }

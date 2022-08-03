@@ -70,15 +70,18 @@ impl AllocatorMetadata {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct RAlloc<'a> {
-    mem: &'a mut [u8],
+pub struct RAlloc {
+    mem: *mut [u8],
 }
 
-impl<'a> RAlloc<'a> {
+impl RAlloc {
     /// Returns `None` if
     /// - mem is too small
     /// - mem is not zeroed
-    pub const fn new(mem: &'a mut [u8]) -> Option<Self> {
+    ///
+    /// # Saftey
+    /// - mem must be valid to use for as long as this struct (and all memory allocated by it) exists
+    pub const unsafe fn new(mem: *mut [u8]) -> Option<Self> {
         // note for people working on this: it is VERY important that `mem` is not written to, as that will cause CTFE errors in some cases
 
         // CTFE assertions go brrrr
@@ -86,11 +89,11 @@ impl<'a> RAlloc<'a> {
         // this just makes shure that the zeroing check is accurate
         const _ASSERT: usize = (AllocatorMetadata::size() == 1) as usize - 1;
         // we do not have to write the AllocatorMetadata becuase it is valid in the state we want if loaded from zeroed mem
-        if mem[0] != 0 {
+        if (&*mem)[0] != 0 {
             return None
         }
         const MIN_SIZE: usize = AllocatorMetadata::size() + Metadata::size();
-        if mem.len() < MIN_SIZE {
+        if (*mem).len() < MIN_SIZE {
             return None
         }
         Some(Self {
@@ -98,12 +101,23 @@ impl<'a> RAlloc<'a> {
         })
     }
 
+    /// # Saftey
+    /// - mem must have come (directly or indirectly) from another allocator that had into_raw() called on it
+    pub unsafe fn from_raw(mem: *mut [u8]) -> Self {
+        Self { mem }
+    }
+
+    /// equvilant to copying the pointer before constructing the allocator, dropping the allocator, and then returning the copied ptr
+    pub fn into_raw(self) -> *mut [u8] {
+        self.mem
+    }
+
     pub fn init(&mut self) {
-        let mut alloc_meta = AllocatorMetadata::from_bytes(&self.mem[..AllocatorMetadata::size()]);
+        let mut alloc_meta = AllocatorMetadata::from_bytes(&unsafe { &*self.mem }[..AllocatorMetadata::size()]);
         if !alloc_meta.initialized {
             alloc_meta.initialized = true;
-            self.mem[..AllocatorMetadata::size()].copy_from_slice(&alloc_meta.to_bytes()[..]);
-            let capac = self.mem.len().checked_sub(AllocatorMetadata::size() + Metadata::size());
+            (unsafe { &mut *self.mem })[..AllocatorMetadata::size()].copy_from_slice(&alloc_meta.to_bytes()[..]);
+            let capac = unsafe { &*self.mem }.len().checked_sub(AllocatorMetadata::size() + Metadata::size());
             // saftey: length of mem is validated in Self::new()
             let capac = unsafe { capac.unwrap_unchecked() };
             self.write_meta_at(0, Metadata { size: capac, used: false });
@@ -123,13 +137,18 @@ impl<'a> RAlloc<'a> {
         let mut ptr = unsafe { self.malloc(size + align)? };
         // * NOTE: currently, when running this under MIRI with -Zmiri-symbolic-alignment-check, this will allways return usize::MAX.
         // *       nothing we can do about it, untill they add that functionality (it is intentional) but other than this its fine :shrug:
-        assert_ne!(ptr.align_offset(align), usize::MAX);
+        // assert_ne!(ptr.align_offset(align), usize::MAX);
         // make shure that the returned offset will not put us beyond the extra size of the allocation
-        assert!(ptr.align_offset(align) < align);
+        // assert!(ptr.align_offset(align) < align);
+        // * NOTE 2: this is fixed with the round_up_to fn
+        // let _before = ptr as usize;
+        ptr = ptr.map_addr(|addr| round_up_to(addr, align));
+        // let _after = ptr as usize;
         // offset the ptr
         // Saftey:
         // bounds of the offset are checked with the last two asserts
-        ptr = unsafe { ptr.add(ptr.align_offset(align)) };
+        // ptr = unsafe { ptr.add(ptr.align_offset(align)) };
+        // let _after = ptr as usize;
         let slice_ptr = slice_from_raw_parts_mut(ptr, size);
         let nonnull = NonNull::new(slice_ptr).unwrap();
         Ok(nonnull)
@@ -256,8 +275,8 @@ impl<'a> RAlloc<'a> {
             return Some(0)
         }
         let meta = self.read_meta_at(offset);
-        let next_idx = Self::base_offset() + offset + Metadata::size() + meta.size;
-        if next_idx >= self.capacity() {
+        let next_idx = offset + Metadata::size() + meta.size;
+        if (Self::base_offset() + next_idx) >= self.capacity() {
             None
         } else {
             Some(next_idx)
@@ -277,7 +296,7 @@ impl<'a> RAlloc<'a> {
     /// - that chunk must be allocated BY THIS ALLOCATOR
     ///
     unsafe fn offset_by_ptr(&self, ptr: *const u8) -> usize {
-        offset_from(&self.mem, ptr)
+        offset_from(&*self.mem, ptr)
     }
 
     /// "uses" a chunk, setting it as taken and returning a pointer to its memory
@@ -315,16 +334,16 @@ impl<'a> RAlloc<'a> {
 
     fn read_meta_at(&self, mut offset: usize) -> Metadata {
         offset += Self::base_offset();
-        Metadata::from_bytes(&self.mem[offset..offset + Metadata::size()])
+        Metadata::from_bytes(&unsafe { &*self.mem }[offset..offset + Metadata::size()])
     }
 
     fn write_meta_at(&mut self, mut offset: usize, meta: Metadata) {
         offset += Self::base_offset();
-        self.mem[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
+        (unsafe { &mut *self.mem })[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
     }
 
     fn capacity(&self) -> usize {
-        self.mem.len()
+        unsafe { &*self.mem }.len()
     }
 
     const fn base_offset() -> usize {
@@ -341,5 +360,11 @@ fn offset_from<T>(slice: &[T], ptr: *const T) -> usize {
     unsafe {
         ptr.offset_from(slice.as_ptr()) as usize
     }
+}
+
+#[inline]
+pub(crate) fn round_up_to(n: usize, divisor: usize) -> usize {
+    debug_assert!(divisor.is_power_of_two());
+    (n + divisor - 1) & !(divisor - 1)
 }
 

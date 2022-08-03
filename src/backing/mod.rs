@@ -2,32 +2,30 @@ pub mod memmap;
 pub mod array;
 pub mod slice;
 
-use crate::allocator::RAlloc;
+use crate::allocator_v2::RAlloc;
 
-/// # Saftey requirements
-///
-/// - for the function get_mem
-///     - it MUST be safe to use the returned pointer AFTER Self has been moved
-///
-pub unsafe trait Backing {
-    fn get_mem(&mut self) -> *mut [u8];
+pub trait Backing {
+    fn get_mem(&mut self) -> &mut [u8];
 }
 
 #[derive(Debug)]
-pub struct BackedAllocator<'a, B: Backing + 'a>(/* drop order: ralloc is dropped before Backing */ RAlloc<'a>, B);
+pub struct BackedAllocator<B: Backing>(
+    B,
+    RAlloc, /* this allows us to hand out mutable references to an allocator,
+    allowing better guarentees. although this may be invalid at any time, it is still fine because the pointer the
+    allocator contains will never be dereferenced and so no rules are broken. this should be replaced every time get_alloc is called. */
+);
 
-impl<'a, B: Backing + 'a> BackedAllocator<'a, B> {
-    pub fn new(mut b: B) -> Self {
-        // # Saftey
-        // the contract of the unsafe trait Backing requires that the ptr
-        // returned by this function stays valid AFTER the original value is moved.
-        // (basically only ptrs, but it works anyway)
-        // TODO: validate the lifetime stuff that happens here
-        let alloc = RAlloc::new(unsafe { &mut*b.get_mem() });
-        Self(alloc, b)
+impl<B: Backing> BackedAllocator<B> {
+    pub fn new(mut b: B) -> Option<Self> {
+        b.get_mem().fill(0);
+        let alloc = unsafe { RAlloc::new(b.get_mem() as *mut _)? };
+        Some(Self(b, alloc))
     }
 
-    pub fn get_alloc(&mut self) -> &mut RAlloc<'a> {
-        &mut self.0
+    pub fn get_alloc(&mut self) -> &mut RAlloc {
+        // fine since Ralloc::into_raw() is equivelant to just dropping self
+        self.1 = unsafe { RAlloc::from_raw(self.0.get_mem() as *mut _)};
+        &mut self.1
     }
 }

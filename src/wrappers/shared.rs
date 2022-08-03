@@ -12,23 +12,23 @@ use crate::backing::{BackedAllocator, Backing};
 /// It is recommended to use multiple allocators per-thread instead of one shared allocator,
 /// because of the overhead and potential to deadlock.
 #[derive(Debug)]
-pub struct RAllocShared<'a, B: Backing>(Rc<RefCell<BackedAllocator<'a, B>>>);
+pub struct RAllocShared<B: Backing>(Rc<RefCell<BackedAllocator<B>>>);
 
-impl<'a, B: Backing> RAllocShared<'a, B> {
-    pub fn new(alloc: BackedAllocator<'a, B>) -> Self {
+impl<B: Backing> RAllocShared<B> {
+    pub fn new(alloc: BackedAllocator<B>) -> Self {
         Self(Rc::new(RefCell::new(alloc)))
     }
 }
 
 /// because rust cant figure out that cloning RAllocShared does not clone `B`
-impl<'a, B: Backing> Clone for RAllocShared<'a, B> {
+impl<B: Backing> Clone for RAllocShared<B> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
 // note: this is ultimately implementing on a ptr (Rc), so in that way it kinda folows the sudgestions
-unsafe impl<'a, B: Backing> Allocator for RAllocShared<'a, B> {
+unsafe impl<B: Backing> Allocator for RAllocShared<B> {
     #[must_use]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // Saftey
