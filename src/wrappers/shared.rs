@@ -1,9 +1,11 @@
-use core::{alloc::{Allocator, AllocError, Layout}, ptr::NonNull};
+use core::{
+    alloc::{AllocError, Allocator, Layout},
+    ptr::NonNull,
+};
 
-use std::{rc::Rc, cell::RefCell};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::backing::{BackedAllocator, Backing};
-
 
 /// A shared wrapper around the allocator.
 ///
@@ -36,13 +38,23 @@ unsafe impl<B: Backing> Allocator for RAllocShared<B> {
         // the returned value is valid for as long as required by Allocator (untill all handles are dropped),
         // because the underlying allocator is stored in Rc<RefCell<T>> which means that it will not be dropped untill all handles are dropped, and
         // the allocator itself has a unique ref to the memory backing, so that cannot be dropped first
-        unsafe { self.0.borrow_mut().get_alloc().allocator_compatable_malloc(layout) }
+        unsafe {
+            self.0
+                .borrow_mut()
+                .get_alloc()
+                .allocator_compatable_malloc(layout)
+        }
     }
 
     #[forbid(unsafe_op_in_unsafe_fn)]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // Saftey
         // convered by the requirements of the Allocator::deallocate
-        unsafe { self.0.borrow_mut().get_alloc().allocator_compatable_free(ptr, layout) };
+        unsafe {
+            self.0
+                .borrow_mut()
+                .get_alloc()
+                .allocator_compatable_free(ptr, layout)
+        };
     }
 }

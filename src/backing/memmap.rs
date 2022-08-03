@@ -1,9 +1,13 @@
-use std::{path::Path, io::{self, Seek}, fs::OpenOptions, ops::DerefMut};
+use std::{
+    fs::OpenOptions,
+    io::{self, Seek},
+    ops::DerefMut,
+    path::Path,
+};
 
-use memmap2::{MmapOptions, MmapMut};
+use memmap2::{MmapMut, MmapOptions};
 
 use super::Backing;
-
 
 /// helper function for creating a memmap for this use case
 ///
@@ -18,7 +22,11 @@ use super::Backing;
 #[must_use]
 #[forbid(unsafe_op_in_unsafe_fn)]
 pub unsafe fn new_map<P: AsRef<Path>>(path: P, size: usize) -> Result<MmapMut, io::Error> {
-    let mut handle = OpenOptions::new().create(true).read(true).write(true).open(path)?;
+    let mut handle = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)?;
     handle.seek(std::io::SeekFrom::Start(0))?;
     handle.set_len(size as u64)?;
     let map = unsafe { MmapOptions::new().len(size).map_mut(&handle)? };

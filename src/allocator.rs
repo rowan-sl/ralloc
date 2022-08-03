@@ -1,4 +1,8 @@
-use core::{mem::size_of, alloc::{AllocError, Layout}, ptr::{NonNull, slice_from_raw_parts_mut}};
+use core::{
+    alloc::{AllocError, Layout},
+    mem::size_of,
+    ptr::{slice_from_raw_parts_mut, NonNull},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Metadata {
@@ -21,13 +25,15 @@ impl Metadata {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         assert!(bytes.len() == 9);
         let mut size_data = [0u8; size_of::<usize>()];
-        size_data.as_mut_slice().clone_from_slice(&bytes[0..size_of::<usize>()]);
+        size_data
+            .as_mut_slice()
+            .clone_from_slice(&bytes[0..size_of::<usize>()]);
         Self {
             size: usize::from_le_bytes(size_data),
             used: match bytes[8] {
                 0 => false,
                 1 => true,
-                v => panic!("cannot convert {v} to a bool")
+                v => panic!("cannot convert {v} to a bool"),
             },
         }
     }
@@ -60,7 +66,7 @@ impl AllocatorMetadata {
         let initialized_byte = bytes[0];
         assert!(initialized_byte == 0 || initialized_byte == 1);
         Self {
-            initialized: initialized_byte == 1
+            initialized: initialized_byte == 1,
         }
     }
 
@@ -90,15 +96,13 @@ impl RAlloc {
         const _ASSERT: usize = (AllocatorMetadata::size() == 1) as usize - 1;
         // we do not have to write the AllocatorMetadata becuase it is valid in the state we want if loaded from zeroed mem
         if (&*mem)[0] != 0 {
-            return None
+            return None;
         }
         const MIN_SIZE: usize = AllocatorMetadata::size() + Metadata::size();
         if (*mem).len() < MIN_SIZE {
-            return None
+            return None;
         }
-        Some(Self {
-            mem
-        })
+        Some(Self { mem })
     }
 
     /// # Saftey
@@ -113,14 +117,24 @@ impl RAlloc {
     }
 
     pub fn init(&mut self) {
-        let mut alloc_meta = AllocatorMetadata::from_bytes(&unsafe { &*self.mem }[..AllocatorMetadata::size()]);
+        let mut alloc_meta =
+            AllocatorMetadata::from_bytes(&unsafe { &*self.mem }[..AllocatorMetadata::size()]);
         if !alloc_meta.initialized {
             alloc_meta.initialized = true;
-            (unsafe { &mut *self.mem })[..AllocatorMetadata::size()].copy_from_slice(&alloc_meta.to_bytes()[..]);
-            let capac = unsafe { &*self.mem }.len().checked_sub(AllocatorMetadata::size() + Metadata::size());
+            (unsafe { &mut *self.mem })[..AllocatorMetadata::size()]
+                .copy_from_slice(&alloc_meta.to_bytes()[..]);
+            let capac = unsafe { &*self.mem }
+                .len()
+                .checked_sub(AllocatorMetadata::size() + Metadata::size());
             // saftey: length of mem is validated in Self::new()
             let capac = unsafe { capac.unwrap_unchecked() };
-            self.write_meta_at(0, Metadata { size: capac, used: false });
+            self.write_meta_at(
+                0,
+                Metadata {
+                    size: capac,
+                    used: false,
+                },
+            );
         }
     }
 
@@ -130,7 +144,10 @@ impl RAlloc {
     ///
     #[must_use]
     #[forbid(unsafe_op_in_unsafe_fn)]
-    pub unsafe fn allocator_compatable_malloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+    pub unsafe fn allocator_compatable_malloc(
+        &mut self,
+        layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
         let align = layout.align();
         let size = layout.size();
 
@@ -195,10 +212,10 @@ impl RAlloc {
         }
         if best.1.size == usize::MAX {
             // println!("Error: OOM (wanted {size})");
-            return Err(AllocError)
+            return Err(AllocError);
         }
         let extra = best.1.size - size;
-        const MIN_SIZE_TO_FRAGMENT: usize = 256;// random number lol. DEFINITALLY should be a power of 2
+        const MIN_SIZE_TO_FRAGMENT: usize = 256; // random number lol. DEFINITALLY should be a power of 2
         const REAL_MIN_SIZE_TO_FRAGMENT: usize = MIN_SIZE_TO_FRAGMENT + Metadata::size();
         if extra > REAL_MIN_SIZE_TO_FRAGMENT {
             self.split_chunk(best.0, size);
@@ -232,7 +249,9 @@ impl RAlloc {
             offset = n_offset;
             let meta = self.read_meta_at(n_offset);
             // println!("offset {}, raw_offset {}, min: {}, max: {}", offset, raw_offset, offset + Metadata::size(), offset + Metadata::size() + meta.size);
-            if (offset + Metadata::size() <= raw_offset) && (raw_offset < offset + Metadata::size() + meta.size) {
+            if (offset + Metadata::size() <= raw_offset)
+                && (raw_offset < offset + Metadata::size() + meta.size)
+            {
                 // we found it!
                 self.set_chunk_used(offset, false);
                 return;
@@ -259,7 +278,13 @@ impl RAlloc {
                         break;
                     }
                 }
-                self.write_meta_at(offset, Metadata { size: overall_size, used: false });
+                self.write_meta_at(
+                    offset,
+                    Metadata {
+                        size: overall_size,
+                        used: false,
+                    },
+                );
             }
         }
     }
@@ -272,7 +297,7 @@ impl RAlloc {
     fn next_chunk(&self, offset: usize) -> Option<usize> {
         //TODO a less hacky way of doing this
         if offset == usize::MAX {
-            return Some(0)
+            return Some(0);
         }
         let meta = self.read_meta_at(offset);
         let next_idx = offset + Metadata::size() + meta.size;
@@ -308,11 +333,16 @@ impl RAlloc {
     ///
     unsafe fn use_chunk(&mut self, offset: usize) -> *mut u8 {
         self.set_chunk_used(offset, true);
-        self.mem.as_mut_ptr().add(Self::base_offset() + offset + Metadata::size())
+        self.mem
+            .as_mut_ptr()
+            .add(Self::base_offset() + offset + Metadata::size())
     }
 
     fn set_chunk_used(&mut self, offset: usize, used: bool) {
-        let Metadata { size, used: prev_used } = self.read_meta_at(offset);
+        let Metadata {
+            size,
+            used: prev_used,
+        } = self.read_meta_at(offset);
         if used {
             assert!(!prev_used, "cannot allocate an already allocated chunk!");
         } else {
@@ -325,11 +355,26 @@ impl RAlloc {
         let Metadata { size, used } = self.read_meta_at(offset);
         assert!(!used, "cannot split an in-use chunk!");
         // the `+ 1` is not here because it needs to be, its here because otherwise you could get zero sized chunks (useless)
-        assert!(size >= new_size + Metadata::size() + 1, "New size is too small to fit another section!");
+        assert!(
+            size >= new_size + Metadata::size() + 1,
+            "New size is too small to fit another section!"
+        );
         let left_size = new_size;
         let right_size = size - new_size + Metadata::size();
-        self.write_meta_at(offset, Metadata { size: left_size, used: false });
-        self.write_meta_at(offset + Metadata::size() + left_size, Metadata { size: right_size, used: false });
+        self.write_meta_at(
+            offset,
+            Metadata {
+                size: left_size,
+                used: false,
+            },
+        );
+        self.write_meta_at(
+            offset + Metadata::size() + left_size,
+            Metadata {
+                size: right_size,
+                used: false,
+            },
+        );
     }
 
     fn read_meta_at(&self, mut offset: usize) -> Metadata {
@@ -339,7 +384,8 @@ impl RAlloc {
 
     fn write_meta_at(&mut self, mut offset: usize, meta: Metadata) {
         offset += Self::base_offset();
-        (unsafe { &mut *self.mem })[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
+        (unsafe { &mut *self.mem })[offset..offset + Metadata::size()]
+            .copy_from_slice(&meta.to_bytes()[..])
     }
 
     fn capacity(&self) -> usize {
@@ -351,15 +397,15 @@ impl RAlloc {
     }
 }
 
-
 /// Returns the offset of `ptr` into `slice`.
 /// Panics if `ptr` points to a location outside the slice or is misaligned.
 fn offset_from<T>(slice: &[T], ptr: *const T) -> usize {
-    assert!(ptr as usize % std::mem::align_of::<T>() == 0, "bad alignment");
+    assert!(
+        ptr as usize % std::mem::align_of::<T>() == 0,
+        "bad alignment"
+    );
     assert!(slice.as_ptr_range().contains(&ptr), "index oob");
-    unsafe {
-        ptr.offset_from(slice.as_ptr()) as usize
-    }
+    unsafe { ptr.offset_from(slice.as_ptr()) as usize }
 }
 
 #[inline]
@@ -367,4 +413,3 @@ pub(crate) fn round_up_to(n: usize, divisor: usize) -> usize {
     debug_assert!(divisor.is_power_of_two());
     (n + divisor - 1) & !(divisor - 1)
 }
-

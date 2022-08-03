@@ -4,9 +4,5 @@
 #![feature(slice_ptr_get)]
 
 pub mod allocator;
-pub mod wrappers;
 pub mod backing;
-
-fn main() {
-
-}
+pub mod wrappers;
