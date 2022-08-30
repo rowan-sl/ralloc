@@ -3,6 +3,7 @@ use core::{
     mem::size_of,
     ptr::{slice_from_raw_parts_mut, NonNull},
 };
+use std::ptr::slice_from_raw_parts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Metadata {
@@ -95,11 +96,11 @@ impl RAlloc {
         // this just makes shure that the zeroing check is accurate
         const _ASSERT: usize = (AllocatorMetadata::size() == 1) as usize - 1;
         // we do not have to write the AllocatorMetadata becuase it is valid in the state we want if loaded from zeroed mem
-        if (Self { mem }).mem()[0] != 0 {
+        if (Self { mem }).mem(0, 1)[0] != 0 {
             return None;
         }
         const MIN_SIZE: usize = AllocatorMetadata::size() + Metadata::size();
-        if (Self { mem }).mem().len() < MIN_SIZE {
+        if (Self { mem }).capacity() < MIN_SIZE {
             return None;
         }
         Some(Self { mem })
@@ -118,13 +119,12 @@ impl RAlloc {
 
     pub fn init(&mut self) {
         let mut alloc_meta =
-            AllocatorMetadata::from_bytes(&self.mem()[..AllocatorMetadata::size()]);
+            AllocatorMetadata::from_bytes(&self.mem(0, AllocatorMetadata::size()));
         if !alloc_meta.initialized {
             alloc_meta.initialized = true;
-            self.mem_mut()[..AllocatorMetadata::size()].copy_from_slice(&alloc_meta.to_bytes()[..]);
+            self.mem_mut(0, AllocatorMetadata::size()).copy_from_slice(&alloc_meta.to_bytes()[..]);
             let capac = self
-                .mem()
-                .len()
+                .capacity()
                 .checked_sub(AllocatorMetadata::size() + Metadata::size());
             // saftey: length of mem is validated in Self::new()
             let capac = unsafe { capac.unwrap_unchecked() };
@@ -321,7 +321,7 @@ impl RAlloc {
     /// - that chunk must be allocated BY THIS ALLOCATOR
     ///
     unsafe fn offset_by_ptr(&self, ptr: *const u8) -> usize {
-        offset_from(self.mem(), ptr)
+        offset_from(self.mem, ptr)
     }
 
     /// "uses" a chunk, setting it as taken and returning a pointer to its memory
@@ -379,40 +379,42 @@ impl RAlloc {
 
     fn read_meta_at(&self, mut offset: usize) -> Metadata {
         offset += Self::base_offset();
-        Metadata::from_bytes(&self.mem()[offset..offset + Metadata::size()])
+        // Metadata::from_bytes(&self.mem()[offset..offset + Metadata::size()])
+        Metadata::from_bytes(self.mem(offset, Metadata::size()))
     }
 
     fn write_meta_at(&mut self, mut offset: usize, meta: Metadata) {
         offset += Self::base_offset();
-        self.mem_mut()[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
+        // self.mem_mut()[offset..offset + Metadata::size()].copy_from_slice(&meta.to_bytes()[..])
+        self.mem_mut(offset, Metadata::size()).copy_from_slice(meta.to_bytes().as_slice());
     }
 
-    fn capacity(&self) -> usize {
-        self.mem().len()
+    const fn capacity(&self) -> usize {
+        self.mem.len()
     }
 
     const fn base_offset() -> usize {
         AllocatorMetadata::size()
     }
 
-    const fn mem(&self) -> &[u8] {
-        unsafe { &*(self.mem.as_ptr() as *const _) }
+    const fn mem(&self, offset: usize, len: usize) -> &[u8] {
+        unsafe { &*slice_from_raw_parts(self.mem.as_ptr().as_mut_ptr().offset(offset as isize), len) }
     }
 
-    const fn mem_mut(&mut self) -> &mut [u8] {
-        unsafe { &mut *self.mem.as_ptr() }
+    fn mem_mut(&mut self, offset: usize, len: usize) -> &mut [u8] {
+        unsafe { &mut *slice_from_raw_parts_mut(self.mem.as_ptr().as_mut_ptr().offset(offset as isize), len) }
     }
 }
 
 /// Returns the offset of `ptr` into `slice`.
 /// Panics if `ptr` points to a location outside the slice or is misaligned.
-fn offset_from<T>(slice: &[T], ptr: *const T) -> usize {
+fn offset_from<T>(slice: NonNull<[T]>, ptr: *const T) -> usize {
     assert!(
         ptr as usize % std::mem::align_of::<T>() == 0,
         "bad alignment"
     );
-    assert!(slice.as_ptr_range().contains(&ptr), "index oob");
-    unsafe { ptr.offset_from(slice.as_ptr()) as usize }
+    assert!((slice.as_ptr().cast::<T>()..unsafe { slice.as_ptr().cast::<T>().offset(slice.len() as isize) }).contains(&(ptr as _)), "index oob");
+    unsafe { ptr.offset_from(slice.as_ptr().cast::<T>()) as usize }
 }
 
 #[inline]
