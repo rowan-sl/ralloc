@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+libc = "0.2.132"
 memmap2 = { version = "0.5.4", optional = true }
 na_print = "1"
 numtoa = "0.2"
