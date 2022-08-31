@@ -1,9 +1,14 @@
 use core::{
     alloc::{AllocError, Allocator, Layout},
+    cell::RefCell,
     ptr::NonNull,
 };
 
-use std::{cell::RefCell, rc::Rc};
+#[cfg(all(feature="alloc", not(feature="std")))]
+use alloc::rc::Rc;
+
+#[cfg(all(feature="std", not(feature="alloc")))]
+use std::rc::Rc;
 
 use crate::backing::{BackedAllocator, Backing};
 

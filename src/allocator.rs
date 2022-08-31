@@ -1,9 +1,8 @@
 use core::{
     alloc::{AllocError, Layout},
     mem::size_of,
-    ptr::{slice_from_raw_parts_mut, NonNull},
+    ptr::{slice_from_raw_parts_mut, slice_from_raw_parts, NonNull},
 };
-use std::ptr::slice_from_raw_parts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Metadata {
@@ -410,7 +409,7 @@ impl RAlloc {
 /// Panics if `ptr` points to a location outside the slice or is misaligned.
 fn offset_from<T>(slice: NonNull<[T]>, ptr: *const T) -> usize {
     assert!(
-        ptr as usize % std::mem::align_of::<T>() == 0,
+        ptr as usize % core::mem::align_of::<T>() == 0,
         "bad alignment"
     );
     assert!((slice.as_ptr().cast::<T>()..unsafe { slice.as_ptr().cast::<T>().offset(slice.len() as isize) }).contains(&(ptr as _)), "index oob");

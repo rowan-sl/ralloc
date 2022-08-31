@@ -1,8 +1,9 @@
 pub mod array;
+#[cfg(feature="std")]
 pub mod memmap;
 pub mod slice;
 
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 
 use crate::allocator::RAlloc;
 
